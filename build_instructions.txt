@@ -1,0 +1,60 @@
+=== BUILD INSTRUCTIONS FOR MONOLITH ENGINE ===
+
+STEP 1: Install PyInstaller
+----------------------------
+pip install pyinstaller
+
+
+STEP 2: Build the executable
+-----------------------------
+pyinstaller build.spec
+
+
+STEP 3: Find your executable
+-----------------------------
+The executable will be in:
+  dist\MonolithEngine.exe
+
+
+STEP 4: Test the executable
+----------------------------
+- Copy the entire 'data' folder to the same directory as MonolithEngine.exe
+- Run MonolithEngine.exe
+- The app will create master_database.duckdb in the same directory
+
+
+OPTIONAL: Create single-folder distribution
+--------------------------------------------
+The current spec creates a single-file executable.
+If you prefer a folder with separate files (faster startup):
+
+Change this line in build.spec:
+  exe = EXE(
+    pyz,
+    a.scripts,
+    a.binaries,    # Remove these 3 lines
+    a.zipfiles,    # for folder distribution
+    a.datas,       #
+    [],
+
+To:
+  exe = EXE(
+    pyz,
+    a.scripts,
+    [],
+
+
+TROUBLESHOOTING:
+----------------
+1. If DuckDB fails: pip install --upgrade duckdb
+2. If PyQt5 missing: pip install --upgrade PyQt5
+3. If pandas errors: pip install --upgrade pandas openpyxl xlrd pyarrow
+4. For smaller exe size: Remove 'upx=True' from build.spec
+
+
+NOTES:
+------
+- First run will be slow (PyInstaller extracts files)
+- The data/ folder must exist in the same directory as the .exe
+- Database file (master_database.duckdb) will be created automatically
+- Console window is hidden (console=False)

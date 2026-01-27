@@ -1,0 +1,6 @@
+pandas
+duckdb
+PyQt5
+openpyxl
+pyarrow
+xlrd
