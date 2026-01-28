@@ -61,6 +61,11 @@ class DatabaseManager:
         tables = self.get_tables()
         return table_name in tables
     
+    def drop_table(self, table_name):
+        """Drop/delete a table from the database"""
+        query = f"DROP TABLE IF EXISTS {table_name}"
+        self.conn.execute(query)
+    
     def is_file_ingested(self, file_path):
         """Check if file has already been ingested with same size and modified time"""
         file_name = os.path.basename(file_path)

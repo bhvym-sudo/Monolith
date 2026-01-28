@@ -1,8 +1,9 @@
-from PyQt5.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLineEdit, QPushButton, QTableWidget, QTableWidgetItem, QHeaderView, QLabel
+from PyQt5.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLineEdit, QPushButton, QTableWidget, QTableWidgetItem, QHeaderView, QLabel, QFileDialog, QApplication
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from PyQt5.QtGui import QColor, QTextCharFormat, QTextDocument, QTextCursor
 from engine.database import DatabaseManager
 from .highlight_delegate import HighlightDelegate
+import csv
 
 
 class SearchWorker(QThread):
@@ -34,7 +35,11 @@ class SearchWorker(QThread):
                 columns = [col[1] for col in columns_result]
                 
                 # Search through all rows and columns
-                for row in data:
+                seen_rows = set()  # Track rows already added
+                for row_idx, row in enumerate(data):
+                    row_has_match = False
+                    matched_column = None
+                    
                     for col_idx, cell_value in enumerate(row):
                         if cell_value is None:
                             continue
@@ -44,10 +49,18 @@ class SearchWorker(QThread):
                         
                         # Check if search term is contained in cell value
                         if search_lower in cell_str:
+                            row_has_match = True
+                            matched_column = columns[col_idx]
+                            break  # Found match in this row
+                    
+                    # Add row only once if it has a match
+                    if row_has_match:
+                        row_key = (table, row_idx)
+                        if row_key not in seen_rows:
+                            seen_rows.add(row_key)
                             results.append({
                                 'table': table,
-                                'column': columns[col_idx],
-                                'value': str(cell_value),
+                                'matched_column': matched_column,
                                 'row': row,
                                 'columns': columns,
                                 'match_term': self.search_term
@@ -64,12 +77,13 @@ class SearchWindow(QDialog):
         self.db_manager = database_manager
         self.search_worker = None
         self.highlight_delegate = HighlightDelegate()
+        self.current_results = []  # Store current search results
         self.init_ui()
         
     def init_ui(self):
-        self.setWindowTitle("Database Search")
-        # Much larger window size
-        self.setGeometry(200, 100, 1600, 900)
+        self.setWindowTitle("Database Search - Full Row Display")
+        # Much larger window size for full row display
+        self.setGeometry(100, 50, 1800, 950)
         self.setStyleSheet("""
             QDialog {
                 background-color: #1E1E1E;
@@ -105,8 +119,14 @@ class SearchWindow(QDialog):
         self.search_btn.clicked.connect(self.perform_search)
         self.search_btn.setStyleSheet(self.get_button_style())
         
+        self.export_btn = QPushButton("Export Results")
+        self.export_btn.clicked.connect(self.export_results)
+        self.export_btn.setEnabled(False)
+        self.export_btn.setStyleSheet(self.get_button_style())
+        
         search_layout.addWidget(self.search_input)
         search_layout.addWidget(self.search_btn)
+        search_layout.addWidget(self.export_btn)
         
         layout.addLayout(search_layout)
         
@@ -118,7 +138,7 @@ class SearchWindow(QDialog):
         # Results table at bottom
         self.results_table = QTableWidget()
         self.results_table.setColumnCount(2)
-        self.results_table.setHorizontalHeaderLabels(["Table/File", "Matched Value"])
+        self.results_table.setHorizontalHeaderLabels(["Table/File", "Full Row Data"])
         
         # Force scrollbars and disable word wrap
         self.results_table.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
@@ -188,6 +208,9 @@ class SearchWindow(QDialog):
         self.results_table.setItemDelegateForColumn(1, self.highlight_delegate)
         self.results_table.setAlternatingRowColors(True)
         
+        # Connect double-click to copy function
+        self.results_table.cellDoubleClicked.connect(self.copy_row_data)
+        
         layout.addWidget(self.results_table, 1)
         
         self.setLayout(layout)
@@ -212,34 +235,101 @@ class SearchWindow(QDialog):
     
     def display_results(self, results):
         self.search_btn.setEnabled(True)
+        self.current_results = results  # Store for export
         
         if not results:
             self.status_label.setText(f"No matches found")
             self.results_table.setRowCount(0)
+            self.export_btn.setEnabled(False)
             return
         
-        # Remove duplicates based on table + value combination
-        seen = set()
-        unique_results = []
-        for result in results:
-            key = (result['table'], result['value'])
-            if key not in seen:
-                seen.add(key)
-                unique_results.append(result)
+        self.export_btn.setEnabled(True)
+        self.status_label.setText(f"Found {len(results)} matching rows")
+        self.results_table.setRowCount(len(results))
         
-        self.status_label.setText(f"✓ Found {len(unique_results)} unique matches")
-        self.results_table.setRowCount(len(unique_results))
-        
-        for idx, result in enumerate(unique_results):
+        for idx, result in enumerate(results):
             # Column 0: Table name
             table_item = QTableWidgetItem(result['table'])
             table_item.setForeground(QColor("#9CDCFE"))
             self.results_table.setItem(idx, 0, table_item)
             
-            # Column 1: Just the value (highlighting will be done by delegate)
-            value_item = QTableWidgetItem(result['value'])
+            # Column 1: Full row data formatted as "Column: Value"
+            row_data = result['row']
+            columns = result['columns']
+            
+            # Format as multi-line or single line with separators
+            row_display = []
+            for col_name, col_value in zip(columns, row_data):
+                if col_value is not None and str(col_value).strip():
+                    row_display.append(f"{col_name}: {col_value}")
+            
+            full_row_text = "  |  ".join(row_display)
+            
+            value_item = QTableWidgetItem(full_row_text)
             value_item.setForeground(QColor("#DCDCDC"))
             self.results_table.setItem(idx, 1, value_item)
+    
+    def copy_row_data(self, row, column):
+        """Copy full row data to clipboard on double-click"""
+        if row < len(self.current_results):
+            result = self.current_results[row]
+            row_data = result['row']
+            columns = result['columns']
+            
+            # Format row data
+            row_text = []
+            for col_name, col_value in zip(columns, row_data):
+                if col_value is not None:
+                    row_text.append(f"{col_name}: {col_value}")
+            
+            full_text = "\n".join(row_text)
+            
+            # Copy to clipboard
+            clipboard = QApplication.clipboard()
+            clipboard.setText(full_text)
+            
+            self.status_label.setText(f"Row data copied to clipboard!")
+    
+    def export_results(self):
+        """Export search results to CSV file"""
+        if not self.current_results:
+            return
+        
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export Search Results",
+            "search_results.csv",
+            "CSV Files (*.csv)"
+        )
+        
+        if not file_path:
+            return
+        
+        try:
+            with open(file_path, 'w', newline='', encoding='utf-8') as csvfile:
+                # Get all unique columns from all results
+                all_columns = set(['Table', 'Matched_Column'])
+                for result in self.current_results:
+                    all_columns.update(result['columns'])
+                
+                all_columns = ['Table', 'Matched_Column'] + sorted([c for c in all_columns if c not in ['Table', 'Matched_Column']])
+                
+                writer = csv.writer(csvfile)
+                writer.writerow(all_columns)
+                
+                # Write each result row
+                for result in self.current_results:
+                    row_dict = {col: val for col, val in zip(result['columns'], result['row'])}
+                    row_dict['Table'] = result['table']
+                    row_dict['Matched_Column'] = result.get('matched_column', '')
+                    
+                    csv_row = [row_dict.get(col, '') for col in all_columns]
+                    writer.writerow(csv_row)
+            
+            self.status_label.setText(f"Exported {len(self.current_results)} rows to {file_path}")
+            
+        except Exception as e:
+            self.status_label.setText(f"Export failed: {str(e)}")
     
     def get_button_style(self):
         return """
